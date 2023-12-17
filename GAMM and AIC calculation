@@ -1,0 +1,138 @@
+############# below are codes for GAMM modelling and AIC calculation etc. to choose the best models 
+
+# Clean up
+rm(list=ls())
+ 
+# Working directory
+# change to file path on your computer
+wd.data<-"../Asthma_inc.rate.both"
+wd.output<-"../Asthma_inc.rate.both"
+wd.models<-"../Asthma_inc.rate.both"
+
+setwd(wd.data)
+
+# Load libraries
+library(mgcv)
+library(doSNOW)
+library("readxl")
+library(arm)
+#library(plyr)
+library(dplyr)
+library(ggplot2)
+library(mgcv)
+library(gridExtra)
+library(Cairo)
+
+# Read cleaned/combined data
+file_stamp<-"Fri_Dec_01_19-58_2023"
+data<-read.csv(paste0("clean_AST_inc.rate_GDP_FB_updated_",file_stamp,".csv"))
+
+glimpse(data)
+
+# choose columns to keep 
+clean.data<-data[c("Country","Year","Ast.inc.rate","upper","lower","GDP","total.kcal","fat.kcal","carb.kcal","ID", "abp.kcal", "pbp.kcal")]
+glimpse(clean.data)
+
+clean.data$protein.kcal <- clean.data$abp.kcal + clean.data$pbp.kcal 
+
+clean.data$Country<-as.factor(clean.data$Country)
+
+clean.data$Year<-as.numeric(clean.data$Year)
+dataset<-clean.data
+
+glimpse(dataset)
+
+dataset<-dataset%>%mutate(Sex="Both")
+# add extra column specifying sex 
+
+# We will fit all of the following models 
+formulas_list<-list()
+formulas_list[[1]]<-" ~ 1 + s(Country, bs=\"re\")"
+formulas_list[[2]]<-" ~ s(protein.kcal, carb.kcal, fat.kcal, k=k_nut) + s(Country, bs=\"re\")"
+formulas_list[[3]]<-" ~ s(Year, k=10, bs=\"cr\") + s(Country, bs=\"re\")"
+formulas_list[[4]]<-" ~ s(GDP, k=10, bs=\"cr\") + s(Country, bs=\"re\")"
+formulas_list[[5]]<-" ~ s(protein.kcal, carb.kcal, fat.kcal, k=k_nut) + s(Year, k=10, bs=\"cr\") + s(Country, bs=\"re\")"
+formulas_list[[6]]<-" ~ s(protein.kcal, carb.kcal, fat.kcal, k=k_nut) + s(GDP, k=10, bs=\"cr\") + s(Country, bs=\"re\")"
+formulas_list[[7]]<-" ~ s(Year, k=10, bs=\"cr\") + s(GDP, k=10, bs=\"cr\") + s(Country, bs=\"re\")"
+formulas_list[[8]]<-" ~ te(protein.kcal, carb.kcal, fat.kcal, Year, bs=c(\"tp\", \"cr\"), d=c(3,1), k=c(k_nut, 7)) + s(Country, bs=\"re\")"
+formulas_list[[9]]<-" ~ te(protein.kcal, carb.kcal, fat.kcal, GDP, bs=c(\"tp\", \"cr\"), d=c(3,1), k=c(k_nut, 7)) + s(Country, bs=\"re\")"
+formulas_list[[10]]<-" ~ te(Year, GDP, k=10) + s(Country, bs=\"re\")"
+formulas_list[[11]]<-" ~ te(protein.kcal, carb.kcal, fat.kcal, Year, bs=c(\"tp\", \"cr\"), d=c(3,1), k=c(k_nut, 7)) + s(GDP, k=10, bs=\"cr\") + s(Country, bs=\"re\")"
+formulas_list[[12]]<-" ~ te(protein.kcal, carb.kcal, fat.kcal, GDP, bs=c(\"tp\", \"cr\"), d=c(3,1), k=c(k_nut, 7)) + s(Year, k=10, bs=\"cr\") + s(Country, bs=\"re\")"
+formulas_list[[13]]<-" ~ te(Year, GDP, k=10) + s(protein.kcal, carb.kcal, fat.kcal, k=k_nut) + s(Country, bs=\"re\")"
+
+# The sexes over which we run the two models
+sex <- c("Both")
+
+setwd(wd.output)
+
+# Models for macronutrient supply
+# We will set gamma as the log(n)/2, which is BIC-like (see ?bam) - however note that n is the rows of full_data/2 because sexes are analysed seperately
+#n<-dim(full_data)[1]/2
+# instead of full_data combining male and female, we could carry on with dataset 
+
+n<-dim(dataset)[1]/2
+gamma<-log(n)/2
+
+# choose family and link function (see mgcv package)
+link="log"
+
+# Run in parallel using doSNOW - one model per core, then wash rinse and repeat for the other sexes via the loop
+cl<-makeCluster(length(formulas_list), outfile="")
+registerDoSNOW(cl)
+
+# Open the loop for the sexes
+for(i in 1:length(sex)){
+  
+  # Get the ith dataset for sex i
+  data_i<-dataset[which(dataset$Sex == sex[i]),]
+  
+  # Run in parallel
+  models_list<-foreach(p = 1:length(formulas_list)) %dopar% {
+    require(mgcv)
+    # select k to set complexity of the model 
+    # change to turn the smoothness of the surface/model 
+    k_nut<-10
+    form<-formulas_list[[p]]
+    GAM<-gam(as.formula(paste0("Ast.inc.rate", form)), data=data_i, family=gaussian(link="log"), gamma=gamma)
+    return(GAM)	
+  }
+  
+  # Save the models
+  save(models_list, file=paste0("Complete_cases_GAMS_pre_", sex[i], ".rdata"))
+  
+}
+
+setwd(wd.output)
+
+i=1
+
+# load "models_list" object for sex[i=1] (males)
+load(paste0("Complete_cases_GAMS_pre_", sex[i], ".rdata"))
+
+# Use AIC to select best fit model for the data
+summaries<-lapply(models_list, summary)
+dev<-unlist(lapply(summaries, "[[", 14)) * 100
+AIC<-unlist(lapply(models_list, AIC))
+delta<-AIC-min(AIC)
+weights<-exp(-0.5 * delta) / sum(exp(-0.5 * delta))
+
+# calculate EDF in case models are within 2 AIC (i.e. delta >= 2)
+sumEDF<-c()
+
+for (i in c(1:length(formulas_list)))(
+	sumEDF[i]<-sum(summaries[[i]]$edf)
+	)
+
+formula<-unlist(formulas_list)
+for(i in 1:length(formula)){
+    formula[i]<-paste0("Ast.inc.rate",formulas_list[i])
+}
+
+f<-length(formulas_list)
+AIC<-data.frame(gam=c(1:f),family=rep("gaussian (log link)",f),k_nut=rep(10,f),gamma=rep(gamma,f),dev,AIC,delta, weights,sumEDF,formula=formula,sex=rep(sex[1],f))
+# save the table 
+write.table(AIC, file="AIC_gaussianlog_AST_both_inc.rate-1201.csv", sep=",", row.names=F, col.names=names(AIC))
+
+########### MODEL 12 HERE SEEMS TO BE THE BEST AND NOTHING AROUND DELTA = 2 #######################
+
