@@ -1,0 +1,87 @@
+#### below are codes for processing disease burden data downloaded from Global Burden of Disease 
+
+# Clean up
+rm(list=ls())
+
+# Working directory
+wd<-"../Asthma_inc.rate.both"
+setwd(wd)
+
+library(plyr)
+library(tidyverse)
+library(countrycode)
+
+# import file 
+# Downloaded from IHME GHDx tool
+
+gbd<-read.csv("IHME-GBD_2019_DATA-830d8d08-1.csv")
+# it's alr in the working directory so could just read in 
+
+# check data
+head(gbd)
+
+# remove age col since all "age standardised" 
+names(gbd)[8]
+gbd<-gbd[,-8] #remove "age_name" column 
+
+# select all incidence data 
+# based on the column "measure_name" could chose parameter like "Incidence" or "Prevalence" 
+tag.Ast.inc<-as.vector(which(gbd$measure_name=="Incidence"))
+
+Ast.inc<-gbd[tag.Ast.inc,]
+
+# Data for incidence of all "Asthma"
+tag.Ast<-as.vector(which(Ast.inc$cause_name=="Asthma"))
+Ast.inc<-Ast.inc[tag.Ast,]
+
+# clean dataset 
+# all 'measure' = 'Incidence'
+# all 'cause_name' = 'Asthma'
+Ast.inc <- Ast.inc[, -c(1,2,3,5,8,9,10)]
+
+# all rows with 0 values INCIDENCE ETC = 0 
+tag.zero<-as.vector(which(Ast.inc$val==0 & Ast.inc$upper==0 & Ast.inc$lower==0))
+length(tag.zero)
+# no 0 values found 
+
+#################################################################
+######################## RATE ################################
+#################################################################
+# data with percent metric
+tag.rate<-as.vector(which(Ast.inc$metric_name=="Rate"))
+length(tag.rate)
+
+#EXTRACT ONLY THE RATE VALUE 
+Ast.inc.rate<-Ast.inc[tag.rate,]
+# CLEAN THE DATA REMOVE "metric_name" column
+Ast.inc.rate<-Ast.inc.rate[,-4]
+
+# Add a ID for the year, country, sex 
+Ast.inc.rate$Ast_ID<-paste(Ast.inc.rate$location_name, Ast.inc.rate$year, sep="_")
+
+# check for duplicates
+(length(unique(Ast.inc.rate$Ast_ID))==nrow(Ast.inc.rate))==T
+# IF TRUE IT MEANS NO DUPLICATES 
+
+# Sort by country
+Ast.inc.rate <- Ast.inc.rate[order(Ast.inc.rate$location_name),]
+# order alphabatically 
+
+# Convert to iso3c country names as used in the LT data
+Ast.inc.rate$Country<-countrycode(Ast.inc.rate$location_name, origin="country.name", destination="iso3c")
+# PUT IN THE COUNTRY ID
+
+# Add a ID for the year, country, sex 
+Ast.inc.rate$ID<-paste(Ast.inc.rate$Country, Ast.inc.rate$year, sep="_")
+
+cols<-c("year","val")
+tag<-which(names(Ast.inc.rate)%in%cols)
+
+names(Ast.inc.rate)[tag]<-c("Year","Ast.inc.rate")
+# above to change column title/name 
+
+# no overwrite file 
+stamp<-as.character(format(Sys.time(), "%a_%b_%d_%H-%M_%Y"))
+
+write.table(Ast.inc.rate, file=paste0("Clean_Ast_inc.rate_",stamp,".csv"), sep=",", row.names=F, col.names=names(Ast.inc.rate))
+
