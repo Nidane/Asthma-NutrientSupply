@@ -1,0 +1,162 @@
+###### below are codes used to generate the modelling surface
+
+# Clean up
+rm(list=ls())
+
+# set wd path for own computer 
+wd<-"../Asthma_inc.rate.both"
+wd.gam<-"../Asthma_inc.rate.both"
+wd.data<-"../Asthma_inc.rate.both"
+wd.output<-"../Asthma_inc.rate.both"
+wd.figures<-"../Asthma_inc.rate.both"
+
+library("readxl")
+library(arm)
+#library(plyr)
+library(ggplot2)
+library(mgcv)
+library(gridExtra)
+library(Cairo)
+
+#load datasets
+setwd(wd)
+
+################################
+file_stamp<-"Fri_Dec_01_19-58_2023"
+
+data<-read.csv(paste0("clean_AST_inc.rate_GDP_FB_updated_",file_stamp,".csv"))
+
+data$Country <- as.factor(data$Country)
+#data.m$Country<-as.factor(data.m$Country)
+#data.f$Country<-as.factor(data.f$Country)
+
+data$Year <- as.numeric(data$Year)
+#data.m$Year<-as.numeric(data.m$Year)
+#data.f$Year<-as.numeric(data.f$Year)
+
+data$protein.kcal <- data$abp.kcal + data$pbp.kcal
+
+data <- data %>% mutate(Sex = "Both")
+
+#######################
+
+#load AIC favoured gams
+setwd(wd.output)
+
+load(paste0("Complete_cases_GAMS_pre_", "Both", ".rdata"))
+# object in this file is called "models_list"
+
+# eg. here we are selecting model 12
+GAM<-models_list[[12]]
+
+summary(GAM)
+# R-sq.(adj) =  0.973
+# p < 2e-16
+
+# load in ggSurface and inhull functions
+setwd(wd)
+source("../ggSurface.R")
+source("../inhull.R")
+
+newSurface<-function(dataset.plot=dataset.plot){
+		XYZ_list<-list()
+		XYZ_list[[1]]<-c("protein.kcal", "carb.kcal", "fat.kcal")
+		XYZ_list[[2]]<-c("protein.kcal", "fat.kcal", "carb.kcal")
+		XYZ_list[[3]]<-c("fat.kcal", "carb.kcal", "protein.kcal")
+
+		
+		y1<-round((min(dataset.plot$carb.kcal)-10)/10)*10
+		y2<-round((min(dataset.plot$fat.kcal)-10)/10)*10
+		y3<-round((max(dataset.plot$carb.kcal)+10)/10)*10
+		y4<-round((max(dataset.plot$fat.kcal)+10)/10)*10
+
+
+		# Limits for the y.axis
+		y_limits<-list()
+		y_limits[[1]]<-c(y1, y3)
+		y_limits[[2]]<-c(y2, y4)
+		y_limits[[3]]<-y_limits[[1]]
+
+		output<-list(XYZ_list,y_limits)
+
+		return(output)
+}
+
+labels_list<-c("Protein (kcal/capita/day)","Carbohydrate (kcal/capita/day)", "Fat (kcal/capita/day)")
+
+#########################################################
+################ generating the surface #################
+#########################################################
+
+# if you want to specify to create the surface based on the nutrient space from only a single year set i 
+i=2018
+dataset.plot<-data[data$Year==i,]
+
+mins<-array(NA, c(3,1))
+maxs<-mins
+year.plot<-i
+age.plot<-"standardized"
+
+med.GDP<-round(median(dataset.plot$GDP, na.rm=T))
+
+predict.val<-data.frame(Year=year.plot, GDP=med.GDP, Sex=as.factor("Both"), Age=age.plot)
+
+
+XYZ_list<-newSurface(dataset.plot=dataset.plot)[[1]]
+y_limits<-newSurface(dataset.plot=dataset.plot)[[2]]
+
+
+# run first time to set surface min and max 
+for(j in 1:3){
+	
+	# Set the parameters for XYZ set j
+	XYZ<-XYZ_list[[j]]
+	labels<-labels_list[match(XYZ, XYZ_list[[1]])]
+	z.val<-round(quantile(dataset.plot[,XYZ[3]])[3])
+	
+	# Remake the surfaces sacles by the corss-surface min and max
+	# set GAM to the chosen GAM object set above
+	gg_surfaces<-ggSurface(GAM=GAM, data=dataset.plot, XYZ=XYZ, labels=labels, exclude=c("s(Country)"), predict_val=predict.val, contour_at=NA, subtitle=paste0(labels[3], " = ", z.val), z.val=z.val, y.limits=y_limits[[j]])
+	
+    mins[j,1]<-min(gg_surfaces[[1]]$data$fit)
+	maxs[j,1]<-max(gg_surfaces[[1]]$data$fit)
+}
+
+min_use<-min(mins)
+max_use<-max(maxs)
+
+# run again to create surfaces with same surface scale 
+# assign surfaces to list
+surfaces_list<-list()
+
+for(j in 1:3){
+
+	XYZ<-XYZ_list[[j]]
+	labels<-labels_list[match(XYZ, XYZ_list[[1]])]
+	z.val<-round(quantile(dataset.plot[,XYZ[3]])[3])
+
+    surfaces<-ggSurface(GAM=GAM, data=dataset.plot, XYZ=XYZ, labels=labels, exclude=c("s(Country)"), predict_val=predict.val,
+					surf_min=min_use, surf_max=max_use, subtitle=paste0(labels[3], " = ", z.val), z.val=z.val, y.limits=y_limits[[j]])
+	
+	
+	# Annotate
+	surfaces[[1]]<-surfaces[[1]] + annotate("text", x = floor(min(dataset.plot[,XYZ[1]])), y = max(y_limits[[j]]), label ="Both Asthma.inc.rate (2018) median GDP", hjust = 0, vjust = 1, size = 7)
+
+	
+	# Save them				
+	surfaces_list[[j]]<-surfaces
+}
+
+
+# Now lets arrange and save all those plots
+setwd(wd.output)
+
+CairoPDF(paste0("Asthma.inc.rate_Both_median GDP_50%",year.plot,".pdf"), height=10, width=30)
+
+grid.arrange(surfaces_list[[1]][[1]]+labs(title="A"), 
+				surfaces_list[[2]][[1]]+labs(title="B"), 
+				surfaces_list[[3]][[1]]+labs(title="C"),nrow=1)
+
+dev.off()
+setwd(wd.output)
+
