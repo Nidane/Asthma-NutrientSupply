@@ -1,0 +1,98 @@
+########## below codes are used to combine data for analysis 
+
+# Clean up
+rm(list=ls())
+
+library(plyr)
+library(tidyverse)
+library(countrycode)
+ 
+# Working directory
+wd<-"../Asthma_inc.rate.both"
+setwd(wd)
+
+# whether would need to add GDP data ? 
+
+# Read cleaned GDP data
+# data have been described in https://github.com/AlistairMcNairSenior/ASM_HumanLT
+GDP_data<-read.csv("../Clean_GDP_Mad_updated.csv")
+
+head(GDP_data)
+
+GDP_data$year<-as.numeric(GDP_data$year)
+GDP_data<-GDP_data[-which(GDP_data$year < 1990),]
+
+# Add the GDP_ID - country x year
+GDP_data$GDP_ID<-paste(GDP_data$countrycode, GDP_data$year, sep="_")
+
+## till here would be to see whether to add GDP data 
+
+file_stamp<-"Fri_Nov_03_21-45_2023"
+# data and time following the ones in FAOSTAT file 
+
+# Read cleaned food data
+nut_data<-read.csv(paste0("../Clean_FB_",file_stamp,".csv"))
+
+# Amount animal based protien in kcal add the data as a new column 
+nut_data$ABP<-nut_data$Protein.kcal*nut_data$Prop_ABP
+
+# Amount plant based protein in kcal 
+nut_data$PBP<-nut_data$Protein.kcal-nut_data$ABP
+
+# Add the ID - country x year
+nut_data$ID<-paste(nut_data$Country, nut_data$Year, sep="_")
+
+head(nut_data)
+
+# Drop any FBS data prior to 1990 - when the GBD sheets start
+nut_data<-nut_data[-which(nut_data$Year < 1990),]
+
+# Drop any FBS data after 2018 - when the GDP sheets end -> if using GDP data here 
+nut_data<-nut_data[-which(nut_data$Year > 2018),]
+
+############################################################
+
+# Read cleaned Asthma data
+# combine with incidence RATE data 
+
+# update the file 
+file_stamp<-"Fri_Dec_01_19-49_2023"
+
+# read in disease data 
+AST.inc<-read.csv(paste0("Clean_Ast_inc.rate_",file_stamp,".csv"))
+
+AST.inc<-AST.inc[-which(AST.inc$Year > 2018),]
+
+keep<-match(AST.inc$ID,GDP_data$GDP_ID)
+AST.inc$gdp<-GDP_data$gdppc[keep]
+
+# match Asthma data with FBS data (NUTRITION VS DISEASE)
+
+keep<-match(AST.inc$ID,nut_data$ID)
+
+#both
+
+AST.inc$abp.kcal<-nut_data$ABP[keep]
+AST.inc$pbp.kcal<-nut_data$PBP[keep]
+AST.inc$fat.kcal<-nut_data$Fat.kcal[keep]
+AST.inc$carb.kcal<-nut_data$Carbo.kcal[keep]
+AST.inc$total.kcal<-nut_data$Value.Total.kcal[keep]
+
+# CHECK IF MISSING DATA FOR NUTRITION OR GDP
+# SPECIFY DIFFERENT PARAMETERS UNDER INVESTIGATION 
+remove.row<-which(is.na(AST.inc$fat.kcal)==T & is.na(AST.inc$carb.kcal)==T | is.na(AST.inc$gdp)==T)
+
+complete.data<-AST.inc[-remove.row,]
+head(complete.data)
+
+# CHANGE COLUMN NAME FROM LOWER CASE TO UPPER CASE 
+tag<-which(names(complete.data)=="gdp")
+names(complete.data)[tag]<-c("GDP")
+
+# Save 
+stamp<-as.character(format(Sys.time(), "%a_%b_%d_%H-%M_%Y"))
+
+write.table(complete.data,file=paste0("clean_AST_inc.rate_GDP_FB_updated_",stamp,".csv"),sep=",",row.names=F,col.names=names(complete.data))
+#write.table(complete.data.females,file=paste0("clean_CVD_GDP_FB_updated_females_rate_",stamp,".csv"),sep=",",row.names=F,col.names=names(complete.data.females))
+
+############################################################
